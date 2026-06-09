@@ -5,3 +5,4 @@ Decisions are recorded as [ADRs](https://adr.github.io/) — short, append-only 
 | # | Title | Status |
 |---|---|---|
 | [0001](0001-deterministic-generator-core-drop-paperclip.md) | Deterministic event generator as the core; drop Paperclip from the critical path | Accepted |
+| [0002](0002-skeleton-flesh-hydration.md) | Skeleton/flesh split: deterministic structured events + async LLM hydration | Accepted |

@@ -8,7 +8,7 @@ This repo is empty (no commits, no code yet). This document captures the **inten
 
 ## What this is
 
-A **long-running simulation of the Pied Piper company** (HBO *Silicon Valley*). It continuously emits realistic-but-mocked operational data — Slack messages, Linear issues, Stripe charges/subscriptions, etc. — so we can **demo our own products against a living dataset** instead of static fixtures. The company is modeled by a **deterministic event generator**; the org chart is our own data, not an external system. (Real AI agents are an *optional* live-mode add-on, never a dependency — see §5 and [ADR-0001](docs/adr/0001-deterministic-generator-core-drop-paperclip.md).)
+A **long-running simulation of the Pied Piper company** (HBO *Silicon Valley*). It continuously emits realistic-but-mocked operational data — Slack messages, Linear issues, Stripe charges/subscriptions, etc. — so we can **demo our own products against a living dataset** instead of static fixtures. The company is modeled by a **deterministic event generator**; the org chart is our own data, not an external system. Realistic prose comes from an **async LLM hydrator off the critical path** (see §5 and [ADR-0002](docs/adr/0002-skeleton-flesh-hydration.md)); real AI agents are an *optional* live-mode add-on, never a dependency (see §6 and [ADR-0001](docs/adr/0001-deterministic-generator-core-drop-paperclip.md)).
 
 Three hard requirements shape every design decision:
 
@@ -22,11 +22,17 @@ Three hard requirements shape every design decision:
 flowchart LR
   HP[Hyperparameters\nseed + knobs] --> ENG
   ORG[Org chart\nour own data] --> ENG
-  subgraph GEN[Generation - fast, deterministic]
-    ENG[Discrete-event engine\nSimClock = sim_time] -->|append-only events| NEON[(NeonDB event log\nsim_time + wall_time + timeline_id)]
+  subgraph GEN[Skeleton plane - fast, deterministic, no LLM]
+    ENG[Discrete-event engine\nSimClock = sim_time] -->|structured events + arcs| NEON[(NeonDB event log\nsim_time + wall_time + timeline_id + arc_id)]
   end
+  subgraph FLESH[Flesh plane - async, off critical path]
+    HYD[LLM hydrator\nbatched, per-arc] --> CACHE[(content_cache\nevent_id + prompt_hash)]
+  end
+  NEON --> HYD
   CURSOR[Playback cursor\nas_of sim_time] --> NEON
   NEON -->|project to as_of| DISPATCH[Sink dispatcher]
+  CACHE -->|hit: LLM prose| DISPATCH
+  TPL[Template fallback\nsame port] -->|miss: rendered template| DISPATCH
   DISPATCH --> BD[Backdatable sinks\nStripe test clocks / mock UI]
   DISPATCH --> RT[Realtime-only sinks\nLinear / Slack live]
   AGENTS[Live agents - OPTIONAL\nlive mode, present edge only] -.-> NEON
@@ -38,7 +44,7 @@ The simulation runs on **virtual time**, decoupled from wall-clock, so we can co
 
 - **`sim_time`** (virtual) — the in-world clock and the **canonical timestamp on every event**. Drives all domain logic, event cadence, and time travel.
 - **`wall_time`** (real) — when the event was actually produced/recorded. For debugging/observability only.
-- **external service time** — the `created_at` Linear/Stripe/Slack assign on push. Reconciled via a mapping; never trusted as truth (see §6).
+- **external service time** — the `created_at` Linear/Stripe/Slack assign on push. Reconciled via a mapping; never trusted as truth (see §7).
 
 **Hard rule:** domain code reads `sim_time` from a `SimClock` service (an Effect `Layer` you can swap — the `Clock`/`TestClock` pattern), never `Date.now()` or Postgres `now()`. This single rule is what makes both speed-up and time travel work.
 
@@ -60,18 +66,35 @@ State is **derived**, never the source of truth. Any view (org, finances, Slack 
 
 A single declarative config defines the "shape" of the simulation — growth rate, burn rate, headcount curve, churn, deal velocity, incident frequency, "drama level", etc. Combined with a fixed **random seed**, a given hyperparameter set must produce a **deterministic** event stream (so demos are reproducible and re-runnable). Treat seed + hyperparameters as the reproducibility contract; avoid non-seeded randomness, wall-clock reads, or unordered map iteration in event generation.
 
-### 5. Org chart & the role of agents
+### 5. LLM realism — skeleton/flesh split & async hydration
+
+How we get LLM-quality prose without ever putting an LLM on the fast-forward path ([ADR-0002](docs/adr/0002-skeleton-flesh-hydration.md)). Every event is split across two planes:
+
+- **Skeleton (deterministic, fast).** The engine emits fully **structured** events — actor, type, intent, sentiment, magnitude, refs (e.g. `SlackMessagePosted { author: "gilfoyle", channel: "#infra", arcId: "incident-42", intent: "deflect-blame", sentiment: "snarky" }`). Everything projections, sinks, and downstream events need lives here; generation stays pure `seed + hyperparams → events`, years in seconds.
+- **Flesh (LLM, async, cached).** A **hydrator** worker renders skeleton events into realistic prose (Slack bodies, Linear descriptions, retro docs), cached keyed by `(timeline_id, event_id, prompt_hash)`. It prioritizes the window around the playback cursor — hydrate what the audience is about to see — and never blocks generation or playback.
+
+**The load-bearing invariant: prose is never load-bearing.** No event may depend on the *text* of another event — only on structured skeleton fields. If a future event must "react to what Gilfoyle said", encode the reaction-relevant bit as a skeleton field (`intent`, `outcome`, `decision`); the hydrator honors it, never the reverse. Violating this puts the model back in the generation loop and collapses ADR-0001's guarantees. Enforce mechanically: the hydrator is the only writer to `content_cache`, and the projection/read path has no LLM client in its Layer graph.
+
+Key mechanics (details in ADR-0002):
+
+- **Arcs are the unit of hydration.** Related events are grouped into narrative **arcs** (`arc_id`): incident → Slack thread → Linear issue → postmortem. One arc per LLM call ⇒ coherent threads (message 3 knows what message 2 said).
+- **Prompts are pure functions of the log** — versioned in-repo **persona cards** (Richard, Gilfoyle, Jared, …) + the arc's structured beats + a bounded world-state digest (the projection at the arc's start `sim_time`). Pure inputs make `prompt_hash` a stable cache key; better prompts auto-invalidate exactly the affected entries.
+- **Template fallback on cache miss.** The LLM author and the template author implement the **same port**; playback degrades from "great prose" to "fine prose", never blocks. The no-LLM baseline (ship first, per ADR-0001) *is* the fallback path.
+- **Two determinism tiers.** Default: structural — event stream bit-identical; prose may differ if regenerated cold. Opt-in for canned demos: full — snapshot the populated cache with the timeline; replay reads cache only.
+- **Cost.** Hydration is async ⇒ Anthropic Batch API by default; model tier per arc importance (small for chatter, large for board meetings/incidents/retros); `tokens_per_sim_month` budget knob. Hydrate once, replay forever. Forked timelines share the parent's cache for the common event prefix.
+
+### 6. Org chart & the role of agents
 
 The Pied Piper org (Richard/CEO, Gilfoyle, Dinesh, Jared, …) is **our own data** — roles, reporting structure, headcount over `sim_time` — owned in NeonDB and consumed by the generator. We do **not** delegate this to an external orchestrator. Per [ADR-0001](docs/adr/0001-deterministic-generator-core-drop-paperclip.md), real-time LLM agents (e.g. [Paperclip](https://paperclip.ing/)) are **dropped from the critical path** — they conflict with virtual time, determinism, and cost.
 
 Agents may appear in exactly two ways, neither a dependency of generation or time travel:
 
 - **Live mode (optional, additive).** At the *present edge only*, at real pace, real agents may react to the simulated world for demos where "agentic company" is the point. They must not drive compressed/historical generation — that reintroduces the wall-clock-vs-virtual-time conflict.
-- **Offline authoring (optional).** LLMs may author flavor content (Slack threads, retro notes in character) *during generation*, with output **cached keyed by event id** so determinism and replay hold. The hot path reads the cache, never the model.
+- **Offline authoring (optional).** LLMs may author flavor content (Slack threads, retro notes in character), with output **cached keyed by event id** so determinism and replay hold. The hot path reads the cache, never the model. This is the §5 hydrator — see [ADR-0002](docs/adr/0002-skeleton-flesh-hydration.md) for the full design.
 
-Baseline to ship first: rules / templates / seeded statistical models — no LLMs at all.
+Baseline to ship first: rules / templates / seeded statistical models — no LLMs at all. (Per §5 this baseline doubles as the hydration fallback, so it's never throwaway work.)
 
-### 6. Integration sinks — classify by *time capability*
+### 7. Integration sinks — classify by *time capability*
 
 Each sink is a swappable adapter (ports & adapters) that takes "company state as of `sim_time` T" and renders it into a provider's format. The hard part is that external SaaS assign their own `created_at` and mostly can't be backdated — so don't pretend they can. Every sink **declares its time capability**, and the dispatcher honors it:
 
