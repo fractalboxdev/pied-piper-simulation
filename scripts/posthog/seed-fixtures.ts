@@ -28,6 +28,12 @@
  *   POSTHOG_HOST             (optional) ingestion host; default
  *                            https://us.i.posthog.com (EU: https://eu.i.posthog.com)
  *
+ * Env is injected by dotenvx (`pnpm seed:posthog` runs `dotenvx run -- tsx ...`):
+ * copy `.env.example` to `.env` and fill values — plaintext works out of the
+ * box. Optionally encrypt in place (`dotenvx set POSTHOG_PROJECT_API_KEY <key>`);
+ * the private key lands in `.env.keys` (gitignored — never commit). This script
+ * only reads process.env; it has no loader code of its own.
+ *
  * Run
  * ---
  *   pnpm seed:posthog

@@ -10,6 +10,10 @@ dist/
 .env
 .env.*
 !.env.example
+# dotenvx private decryption keys — never commit (already matched by .env.*,
+# kept explicit so a future loosening of .env.* for encrypted env files
+# cannot accidentally expose it)
+.env.keys
 
 # OS
 .DS_Store
