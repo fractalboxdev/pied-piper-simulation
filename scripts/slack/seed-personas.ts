@@ -9,7 +9,9 @@
  * ------------------------------------------
  * Uses `chat.postMessage` with the `username` + `icon_url` overrides. This is
  * the Slack-sanctioned way for ONE app to speak as many characters. We do NOT
- * create fake human user accounts (against Slack ToS, and unnecessary).
+ * create fake human user accounts here — for real per-persona accounts in the
+ * sandbox (mentionable, in the member directory), see collect-user-tokens.ts
+ * and setup-profiles.ts.
  *
  * Target workspace
  * ----------------
@@ -62,186 +64,28 @@
  *   size, so we swap messages in place rather than accumulate.
  * - Throttled to <= 1 message/sec; 429s honor Retry-After via Effect Schedule.
  */
-import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { Cause, Duration, Effect, Exit, Schedule, Schema } from "effect";
-
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
-
-export class MissingTokenError extends Schema.TaggedError<MissingTokenError>()(
-  "MissingTokenError",
-  { variable: Schema.String },
-) {}
-
-export class PersonasParseError extends Schema.TaggedError<PersonasParseError>()(
-  "PersonasParseError",
-  { reason: Schema.String },
-) {}
-
-export class AvatarInvalidError extends Schema.TaggedError<AvatarInvalidError>()(
-  "AvatarInvalidError",
-  {
-    slug: Schema.String,
-    url: Schema.String,
-    detail: Schema.String,
-  },
-) {}
-
-export class SlackApiError extends Schema.TaggedError<SlackApiError>()(
-  "SlackApiError",
-  {
-    method: Schema.String,
-    /** Slack's `error` code (e.g. "channel_not_found", "missing_scope"), or a transport description. */
-    code: Schema.String,
-  },
-) {}
-
-export class SlackRateLimitedError extends Schema.TaggedError<SlackRateLimitedError>()(
-  "SlackRateLimitedError",
-  {
-    method: Schema.String,
-    retryAfterSeconds: Schema.Number,
-  },
-) {}
+import { Cause, Effect, Exit } from "effect";
+import {
+  type AvatarInvalidError,
+  MissingEnvError,
+  type Persona,
+  type PersonasParseError,
+  type SlackApi,
+  SlackApiError,
+  type SlackCallError,
+  type SlackOkResponse,
+  type SlackRateLimitedError,
+  loadPersonas,
+  makeSlackApi,
+  validateAvatar,
+} from "./lib.ts";
 
 type SeedError =
-  | MissingTokenError
+  | MissingEnvError
   | PersonasParseError
   | AvatarInvalidError
   | SlackApiError
   | SlackRateLimitedError;
-
-// ---------------------------------------------------------------------------
-// Persona cards — parsed straight out of PERSONAS.md
-// ---------------------------------------------------------------------------
-
-const Persona = Schema.Struct({
-  slug: Schema.String,
-  name: Schema.String,
-  role: Schema.String,
-  reports_to: Schema.NullOr(Schema.String),
-  voice: Schema.String,
-  sentiments: Schema.Array(Schema.String),
-  intents: Schema.Array(Schema.String),
-  quirks: Schema.Array(Schema.String),
-  catchphrases: Schema.Array(Schema.String),
-  avatar_url: Schema.String,
-  intro: Schema.String,
-});
-type Persona = typeof Persona.Type;
-
-const PersonaFromJsonBlock = Schema.parseJson(Persona);
-
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const personasPath = join(repoRoot, "PERSONAS.md");
-
-/** Tooling contract (documented in PERSONAS.md): one ```json persona fence per card. */
-const PERSONA_BLOCK = /```json persona\n([\s\S]*?)```/g;
-
-const loadPersonas: Effect.Effect<ReadonlyArray<Persona>, PersonasParseError> =
-  Effect.tryPromise({
-    try: () => readFile(personasPath, "utf8"),
-    catch: (cause) =>
-      new PersonasParseError({ reason: `cannot read PERSONAS.md: ${String(cause)}` }),
-  }).pipe(
-    Effect.flatMap((markdown) => {
-      const blocks = [...markdown.matchAll(PERSONA_BLOCK)].map((m) => m[1] ?? "");
-      if (blocks.length === 0) {
-        return Effect.fail(
-          new PersonasParseError({ reason: "no ```json persona blocks found in PERSONAS.md" }),
-        );
-      }
-      return Effect.forEach(blocks, (block, i) =>
-        Schema.decodeUnknown(PersonaFromJsonBlock)(block).pipe(
-          Effect.mapError(
-            (parseError) =>
-              new PersonasParseError({
-                reason: `persona block #${i + 1} is invalid: ${parseError.message}`,
-              }),
-          ),
-        ),
-      );
-    }),
-  );
-
-// ---------------------------------------------------------------------------
-// Minimal Slack Web API client (fetch + Effect, no SDK)
-// ---------------------------------------------------------------------------
-
-interface SlackMessage {
-  readonly ts?: string;
-  readonly metadata?: {
-    readonly event_type?: string;
-    readonly event_payload?: { readonly persona_slug?: string };
-  };
-}
-
-interface SlackOkResponse {
-  readonly ok: boolean;
-  readonly error?: string;
-  readonly channels?: ReadonlyArray<{ readonly id: string; readonly name: string }>;
-  readonly messages?: ReadonlyArray<SlackMessage>;
-  readonly response_metadata?: { readonly next_cursor?: string };
-}
-
-/**
- * Honors 429 Retry-After: the schedule's delay is taken from the error itself.
- * (`_tag` access inside Schedule predicates is the one sanctioned exception.)
- */
-const rateLimitRetryPolicy = Schedule.identity<SeedError>().pipe(
-  Schedule.whileInput((e: SeedError) => e._tag === "SlackRateLimitedError"),
-  Schedule.addDelay((e) =>
-    e._tag === "SlackRateLimitedError"
-      ? Duration.seconds(Math.max(1, e.retryAfterSeconds))
-      : Duration.zero,
-  ),
-  Schedule.intersect(Schedule.recurs(3)),
-);
-
-const makeSlackApi =
-  (token: string) =>
-  (
-    method: string,
-    payload: Record<string, unknown>,
-  ): Effect.Effect<SlackOkResponse, SlackApiError | SlackRateLimitedError> => {
-    const callOnce = Effect.gen(function* () {
-      const res = yield* Effect.tryPromise({
-        try: () =>
-          fetch(`https://slack.com/api/${method}`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json; charset=utf-8",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify(payload),
-          }),
-        catch: (cause) => new SlackApiError({ method, code: `transport_error: ${String(cause)}` }),
-      });
-      if (res.status === 429) {
-        const retryAfterSeconds = Number(res.headers.get("retry-after") ?? "1");
-        return yield* Effect.fail(
-          new SlackRateLimitedError({
-            method,
-            retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : 1,
-          }),
-        );
-      }
-      const data = yield* Effect.tryPromise({
-        try: () => res.json() as Promise<SlackOkResponse>,
-        catch: (cause) => new SlackApiError({ method, code: `invalid_json: ${String(cause)}` }),
-      });
-      if (!data.ok) {
-        return yield* Effect.fail(new SlackApiError({ method, code: data.error ?? "unknown_error" }));
-      }
-      return data;
-    });
-    return callOnce.pipe(Effect.retry(rateLimitRetryPolicy));
-  };
-
-type SlackApi = ReturnType<typeof makeSlackApi>;
 
 // ---------------------------------------------------------------------------
 // Channel resolution + membership
@@ -250,12 +94,10 @@ type SlackApi = ReturnType<typeof makeSlackApi>;
 const resolveChannelId = (
   api: SlackApi,
   channel: string,
-): Effect.Effect<string, SlackApiError | SlackRateLimitedError> => {
+): Effect.Effect<string, SlackCallError> => {
   if (/^[CG][A-Z0-9]+$/.test(channel)) return Effect.succeed(channel);
   const name = channel.replace(/^#/, "");
-  const page = (
-    cursor: string | undefined,
-  ): Effect.Effect<string, SlackApiError | SlackRateLimitedError> =>
+  const page = (cursor: string | undefined): Effect.Effect<string, SlackCallError> =>
     api("conversations.list", {
       types: "public_channel",
       exclude_archived: true,
@@ -280,7 +122,7 @@ const resolveChannelId = (
 const ensureMembership = (
   api: SlackApi,
   channelId: string,
-): Effect.Effect<void, SlackApiError | SlackRateLimitedError> =>
+): Effect.Effect<void, SlackCallError> =>
   api("conversations.join", { channel: channelId }).pipe(
     Effect.asVoid,
     Effect.catchTag("SlackApiError", (e) =>
@@ -309,7 +151,7 @@ interface SeededIntro {
 const seededIntros = (
   api: SlackApi,
   channelId: string,
-): Effect.Effect<ReadonlyArray<SeededIntro>, SlackApiError | SlackRateLimitedError> =>
+): Effect.Effect<ReadonlyArray<SeededIntro>, SlackCallError> =>
   api("conversations.history", {
     channel: channelId,
     limit: 200,
@@ -333,7 +175,7 @@ const deleteSeededIntro = (
   api: SlackApi,
   channelId: string,
   intro: SeededIntro,
-): Effect.Effect<void, SlackApiError | SlackRateLimitedError> =>
+): Effect.Effect<void, SlackCallError> =>
   Effect.gen(function* () {
     yield* api("chat.delete", { channel: channelId, ts: intro.ts }).pipe(
       Effect.catchTag("SlackApiError", (e) =>
@@ -346,34 +188,6 @@ const deleteSeededIntro = (
     // Same throttle as posting: chat.delete sits in the same rate-limit tier.
     yield* Effect.sleep("1 second");
   });
-
-// ---------------------------------------------------------------------------
-// Avatar validation — HEAD must be 2xx with an image/* content-type
-// ---------------------------------------------------------------------------
-
-const validateAvatar = (persona: Persona): Effect.Effect<void, AvatarInvalidError> =>
-  Effect.tryPromise({
-    try: () => fetch(persona.avatar_url, { method: "HEAD", redirect: "follow" }),
-    catch: (cause) =>
-      new AvatarInvalidError({
-        slug: persona.slug,
-        url: persona.avatar_url,
-        detail: `request failed: ${String(cause)}`,
-      }),
-  }).pipe(
-    Effect.flatMap((res) => {
-      const contentType = res.headers.get("content-type") ?? "<none>";
-      return res.ok && contentType.startsWith("image/")
-        ? Effect.void
-        : Effect.fail(
-            new AvatarInvalidError({
-              slug: persona.slug,
-              url: persona.avatar_url,
-              detail: `HTTP ${res.status}, content-type ${contentType}`,
-            }),
-          );
-    }),
-  );
 
 // ---------------------------------------------------------------------------
 // Seeding
@@ -406,7 +220,7 @@ const seedPersona = (
 const program = Effect.gen(function* () {
   const token = process.env.SLACK_BOT_TOKEN;
   if (token === undefined || token === "") {
-    return yield* Effect.fail(new MissingTokenError({ variable: "SLACK_BOT_TOKEN" }));
+    return yield* Effect.fail(new MissingEnvError({ variable: "SLACK_BOT_TOKEN" }));
   }
   // `??` alone is not enough: an empty `SLACK_CHANNEL=` line in .env yields "".
   const channelEnv = process.env.SLACK_CHANNEL;
@@ -449,7 +263,7 @@ const fail = Effect.sync(() => {
 // Recover every domain error inside the Effect (no try/catch around runPromise).
 const main = program.pipe(
   Effect.catchTags({
-    MissingTokenError: (e) =>
+    MissingEnvError: (e) =>
       Effect.logError(
         `${e.variable} is not set. Export a bot token (xoxb-...) from your sandbox Slack app — see the header of this script.`,
       ).pipe(Effect.andThen(fail)),
