@@ -100,8 +100,10 @@ Each sink is a swappable adapter (ports & adapters) that takes "company state as
 
 - **Backdatable / clock-controllable → faithful virtual time:**
   - **Stripe → use [Test Clocks](https://docs.stripe.com/billing/testing/test-clocks).** Purpose-built for this: attach customers/subscriptions to a test clock and *advance the clock* to fast-forward billing cycles, renewals, invoices, dunning. Map `sim_time` ↔ test-clock time and advance in lockstep.
+  - **PostHog → quasi-backdatable:** the capture/batch API accepts historical `timestamp`s (send `historical_migration: true` for old events) and a client-supplied deterministic `uuid` for replay dedupe — see `scripts/posthog/seed-fixtures.ts`.
   - **Our own mock UI / local emulators** — we own the timestamp. Best surface for historical reconstruction and time travel.
-- **Append-only realtime (can only ever show "now") → Linear, Slack live APIs:**
+- **Append-only realtime (can only ever show "now") → Linear, Slack live APIs, HubSpot:**
+  - **HubSpot:** system `createdate` is server-assigned; carry `sim_time` (+ `sim_event_id`, `timeline_id`) as custom properties and idempote via CRM search on `sim_event_id` — see `scripts/hubspot/seed-fixtures.ts`.
   - Their `created_at` = wall time of the push; you **cannot** rebuild compressed history inside them faithfully.
   - Carry `sim_time` as **metadata** (Linear labels/custom fields like `Sim: 2024-03`, Slack message prefix, Stripe `metadata.sim_time`) so the canonical clock travels with the record.
   - Use live APIs for **"now-forward" live demos** (cursor at the present edge, replayed at a watchable `time_scale`). Render **historical / time-travel** views from the mock surface, not a real workspace.
@@ -136,5 +138,7 @@ A minimal TypeScript/Effect toolchain (pnpm) is committed. Real commands today:
 - `pnpm install` — install dependencies (`effect`, `tsx`, `typescript`).
 - `pnpm typecheck` (or `pnpm exec tsc --noEmit`) — typecheck; must pass before committing.
 - `pnpm seed:slack` — seed the [PERSONAS.md](PERSONAS.md) cast into a Slack sandbox channel via `scripts/slack/seed-personas.ts` (single-app `chat.postMessage` + `username`/`icon_url` overrides). Requires `SLACK_BOT_TOKEN` (and optional `SLACK_CHANNEL`) — see `.env.example` and the script header for Slack app setup (manifest + scopes).
+- `pnpm seed:hubspot` — seed the deterministic fixture customers (companies/contacts/deals from `scripts/fixtures/data.ts`) into a HubSpot developer test account via `scripts/hubspot/seed-fixtures.ts`. Requires `HUBSPOT_PRIVATE_APP_TOKEN` — see the script header for test-account + private-app setup (scopes).
+- `pnpm seed:posthog` — seed the fixture product-usage events (historical timestamps, deterministic UUIDv5 ids) into a PostHog project via `scripts/posthog/seed-fixtures.ts`. Requires `POSTHOG_PROJECT_API_KEY` (optional `POSTHOG_HOST`).
 
 No tests, sim entrypoint, or DB migrations exist yet — add the commands here as they land (`pnpm test`, `pnpm dev`, migration command).

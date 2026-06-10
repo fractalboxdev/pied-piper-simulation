@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "seed:slack": "tsx scripts/slack/seed-personas.ts",
+    "seed:hubspot": "tsx scripts/hubspot/seed-fixtures.ts",
+    "seed:posthog": "tsx scripts/posthog/seed-fixtures.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
