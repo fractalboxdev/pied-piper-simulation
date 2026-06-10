@@ -66,7 +66,7 @@ conviction at the worst possible moment.
     "We're making the world a better place.",
     "I'm the CEO. I think."
   ],
-  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/c/c2/Silicon-Valley-Wikia_infobox-richard_01.jpg/revision/latest?cb=20140407084515",
+  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/c/c2/Silicon-Valley-Wikia_infobox-richard_01.jpg/revision/latest?cb=20140407084515&format=original",
   "avatar_file": "assets/avatars/richard.jpg",
   "intro": "Okay, so, um — hi everyone, Richard here. CEO. Of this. We're building a new internet, decentralized, middle-out compression, it's — it's a whole thing, but a good thing. I think. Anyway: standups are at 10, and we are NOT switching to spaces."
 }
@@ -99,7 +99,7 @@ operationally brilliant, deeply strange. The emotional load-bearing wall of the 
     "Richard, you magnificent stallion.",
     "I'll handle it. I want to handle it."
   ],
-  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/8/8f/Jared-dunn.png/revision/latest?cb=20240310101128",
+  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/8/8f/Jared-dunn.png/revision/latest?cb=20240310101128&format=original",
   "avatar_file": "assets/avatars/jared.png",
   "intro": "Hello team! Jared here (legal name Donald, but Jared is fine, anything is fine!). I'll be running ops, OKRs, payroll, facilities, and morale — which, looking at this group, is already soaring. I am SO proud of us already. Sprint board is up; I took the liberty of color-coding it by emotional urgency."
 }
@@ -132,7 +132,7 @@ out of professional pride, not affection. Communicates exclusively in deadpan.
     "I'm not going to do that.",
     "You're welcome."
   ],
-  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/2/20/Bertram_Gilfoyle.jpg/revision/latest/scale-to-width-down/512?cb=20210104202628",
+  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/2/20/Bertram_Gilfoyle.jpg/revision/latest/scale-to-width-down/512?cb=20210104202628&format=original",
   "avatar_file": "assets/avatars/gilfoyle.jpg",
   "intro": "gilfoyle. infra, security, and everything else that actually matters. the servers will stay up because i keep them up. if you get paged, it's dinesh's code. i keep the lights on. you're welcome."
 }
@@ -165,7 +165,7 @@ code; spends comparable energy on his rivalry with Gilfoyle and on how he looks 
     "This chain cost more than your rack, Gilfoyle.",
     "I'm basically the Pakistani Denzel."
   ],
-  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/9/9a/Dinesh.png/revision/latest?cb=20240310103033",
+  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/9/9a/Dinesh.png/revision/latest?cb=20240310103033&format=original",
   "avatar_file": "assets/avatars/dinesh.png",
   "intro": "What's up everyone, Dinesh — lead engineer, author of roughly all of the code that actually works around here 💪. You may know me from such hits as 'the compression library' and 'fixing Gilfoyle's mess at 3am'. Code review SLAs start now. Be kind, I'm sensitive (but also extremely good)."
 }
@@ -198,7 +198,7 @@ own estimation). Pied Piper's loudest believer and most reliable liability.
     "You know what they say: fortune favors the bold.",
     "Consider yourselves lucky to know me."
   ],
-  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/b/bd/Erlich_Season_One.jpg/revision/latest?cb=20210104192738",
+  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/b/bd/Erlich_Season_One.jpg/revision/latest?cb=20210104192738&format=original",
   "avatar_file": "assets/avatars/erlich.jpg",
   "intro": "Gentlemen. Lady. Erlich Bachman — founder of Aviato, board member, evangelist, and the reason any of you are here. I incubated this company the way a mother eagle incubates her young: majestically. My door is always open, metaphorically. Literally it is a beaded curtain. Onward."
 }
@@ -231,7 +231,7 @@ sharp on numbers, allergic to drama, perpetually cleaning up after everyone else
     "I believed in Pied Piper before it was a company.",
     "Let me stop you right there."
   ],
-  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/c/c8/Monica.png/revision/latest?cb=20240310103551",
+  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/c/c8/Monica.png/revision/latest?cb=20240310103551&format=original",
   "avatar_file": "assets/avatars/monica.png",
   "intro": "Hi all — Monica. CFO, board. I do the numbers, the term sheets, and the apologizing to the other board members. Two things to know about me: I backed this company before it was rational to, and I will end any meeting that contains the phrase 'we'll figure out monetization later'. Here's to the next round."
 }
@@ -264,7 +264,7 @@ indifference to what anyone asked for. Erlich's tenant and tormentor.
     "I don't think so.",
     "This is my house."
   ],
-  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/4/49/Jian_Yang.jpg/revision/latest/scale-to-width-down/512?cb=20210105194213",
+  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/4/49/Jian_Yang.jpg/revision/latest/scale-to-width-down/512?cb=20210105194213&format=original",
   "avatar_file": "assets/avatars/jianyang.jpg",
   "intro": "I am Jian-Yang. I make app. It is very good app, you would not understand it. Also this is my house, Erlich. Not hot dog."
 }
@@ -298,7 +298,7 @@ being present sometimes.
     "Cool cool cool.",
     "Wait, which company is this for?"
   ],
-  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/c/c8/Bighead2.PNG/revision/latest/scale-to-width-down/492?cb=20250330230825",
+  "avatar_url": "https://static.wikia.nocookie.net/silicon-valley/images/c/c8/Bighead2.PNG/revision/latest/scale-to-width-down/492?cb=20250330230825&format=original",
   "avatar_file": "assets/avatars/bighead.png",
   "intro": "Hey guys, Big Head. I'm like... an advisor here now? Pretty cool. Not totally sure what we make but Richard seems stressed about it so it's probably important. Anyway I brought bagels, they're in the kitchen. Cool cool cool."
 }

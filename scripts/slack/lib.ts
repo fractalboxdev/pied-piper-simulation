@@ -191,7 +191,15 @@ export type SlackApi = ReturnType<typeof makeSlackApi>;
 // Avatar helpers
 // ---------------------------------------------------------------------------
 
-/** HEAD must be 2xx with an image/* content-type. */
+/**
+ * Slack renders icon_url avatars only for jpeg/png/gif — webp is silently
+ * dropped (the message falls back to the default app icon). Fandom's CDN
+ * content-negotiates to webp unless the URL carries `format=original`
+ * (the PERSONAS.md contract for avatar_url).
+ */
+const SLACK_SAFE_IMAGE = /^image\/(jpeg|png|gif)\b/;
+
+/** HEAD must be 2xx with a Slack-renderable image content-type (not webp). */
 export const validateAvatar = (persona: Persona): Effect.Effect<void, AvatarInvalidError> =>
   Effect.tryPromise({
     try: () => fetch(persona.avatar_url, { method: "HEAD", redirect: "follow" }),
@@ -204,13 +212,13 @@ export const validateAvatar = (persona: Persona): Effect.Effect<void, AvatarInva
   }).pipe(
     Effect.flatMap((res) => {
       const contentType = res.headers.get("content-type") ?? "<none>";
-      return res.ok && contentType.startsWith("image/")
+      return res.ok && SLACK_SAFE_IMAGE.test(contentType)
         ? Effect.void
         : Effect.fail(
             new AvatarInvalidError({
               slug: persona.slug,
               url: persona.avatar_url,
-              detail: `HTTP ${res.status}, content-type ${contentType}`,
+              detail: `HTTP ${res.status}, content-type ${contentType} (Slack icon_url needs jpeg/png/gif — append format=original to fandom URLs)`,
             }),
           );
     }),
