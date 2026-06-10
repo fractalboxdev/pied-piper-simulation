@@ -46,6 +46,7 @@
  */
 import { Cause, Duration, Effect, Exit, Option, Schedule, Schema } from "effect";
 import {
+  FIXTURE_ERA_SLUG,
   FIXTURE_TIMELINE_ID,
   fixtures,
   type FixtureCompany,
@@ -319,7 +320,7 @@ const seedCompany = (api: HubSpotApi, company: FixtureCompany) =>
       name: company.name,
       domain: company.domain,
       industry: company.industry,
-      description: `${company.industry} — ${company.planTier} plan, $${company.mrr}/mo MRR (simulated Pied Piper customer)`,
+      description: `${company.industry} — ${company.planTier} plan, $${company.mrr}/mo MRR (simulated Pied Piper account, era: ${FIXTURE_ERA_SLUG})`,
       sim_event_id: company.simEventId,
       sim_time: company.simTime,
       timeline_id: FIXTURE_TIMELINE_ID,

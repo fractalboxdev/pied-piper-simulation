@@ -7,20 +7,30 @@
  * exact same records, ids, and timestamps, which is what makes the sinks'
  * idempotency keys (`sim_event_id`, UUIDv5 per event) stable across replays.
  *
+ * Canon (docs/COMPANY.md): the dataset is pinned to the **PiperNet platform
+ * era** (`FIXTURE_ERA_SLUG = "pipernet"`, S5) of Pied Piper's history. Marquee
+ * accounts are the canon customers/partners/rivals (Maleant Data Systems,
+ * Intersite, FGI, Hooli, K-Hole Games, …) with deal stages reflecting their
+ * canon arcs; filler accounts are invented but named to fit the show's world.
+ * The quality metric is the **Weissman score** (plausible range 2.0–5.2; 5.2 is
+ * Richard's TechCrunch Disrupt breakthrough, 2.89 the old theoretical limit).
+ *
  * This is a static stand-in for the real event-log projection: once the
  * discrete-event engine exists, the seeders should consume "company state as of
  * sim_time T" from the log instead of this module (see CLAUDE.md §7).
  *
  * Dataset shape
  * -------------
- * - ~12 fake B2B customer companies of Pied Piper's middle-out compression
- *   platform (invented names — no real businesses), with domain, plan tier, MRR.
+ * - 12 B2B accounts of the PiperNet platform (canon marquee + show-flavored
+ *   filler), with domain, plan tier, MRR.
  * - 1–3 contacts per company (fake people on the company's fake domain).
- * - One deal per company at a varying default-pipeline stage, conceptually owned
- *   by a sales-ish persona from PERSONAS.md (real HubSpot owners are seat-bound,
- *   so the owner travels as a custom property / event property instead).
- * - ~4 sim-weeks of product-usage events per company (logins, files compressed,
- *   compression-ratio measurements) spread over a historical date range.
+ * - One deal per company: canon accounts carry their canon-arc stage and a
+ *   fixed persona owner; filler deals get a varying default-pipeline stage.
+ *   Owners are persona slugs from PERSONAS.md (real HubSpot owners are
+ *   seat-bound, so the owner travels as a custom property / event property).
+ * - ~4 sim-weeks of product-usage events per paying company (logins, files
+ *   compressed with per-file Weissman scores, daily Weissman measurements,
+ *   PiperNet `node_joined` events) spread over a historical date range.
  *
  * Every record carries a stable `simEventId` and belongs to `FIXTURE_TIMELINE_ID`.
  */
@@ -34,6 +44,13 @@ export const FIXTURE_SEED = 0x51c0de01;
 
 /** Timeline every fixture record belongs to (CLAUDE.md §3 branching timelines). */
 export const FIXTURE_TIMELINE_ID = "fixtures-main";
+
+/**
+ * Company-history era the fixture window represents — an era slug from
+ * docs/COMPANY.md (the PiperNet platform era, S5). The sim_time axis is
+ * independent of the show's broadcast years; eras carry ordering, not dates.
+ */
+export const FIXTURE_ERA_SLUG = "pipernet";
 
 /**
  * Fixed epoch for the usage window: 2024-03-04T00:00:00Z (a Monday).
@@ -92,7 +109,7 @@ export type DealStage =
   | "closedlost";
 
 export interface FixtureCompany {
-  /** Stable fixture id, e.g. "octopipe-media" — also the idempotency anchor. */
+  /** Stable fixture id, e.g. "maleant-data-systems" — also the idempotency anchor. */
   readonly id: string;
   readonly simEventId: string;
   /** Canonical sim_time of the company's signup, ISO 8601. */
@@ -132,7 +149,8 @@ export interface FixtureDeal {
 export type UsageEventName =
   | "user_logged_in"
   | "file_compressed"
-  | "compression_ratio_measured";
+  | "weissman_score_measured"
+  | "node_joined";
 
 export interface FixtureUsageEvent {
   readonly simEventId: string;
@@ -153,26 +171,111 @@ export interface FixtureDataset {
 }
 
 // ---------------------------------------------------------------------------
-// Seed pools (static, invented)
+// Seed pools
 // ---------------------------------------------------------------------------
 
 /**
- * Invented B2B customers of a middle-out compression platform. Names are
- * fictional; any resemblance to real companies is accidental.
+ * Persona slugs from PERSONAS.md who own deals (the single source of truth for
+ * the cast — see its format contract): Monica (investor/board-side), Erlich
+ * (evangelist), Jared (biz-ops). Real HubSpot owners are seat-bound users, so
+ * deals carry the persona as the `persona_owner` custom property instead.
  */
-const COMPANY_POOL: ReadonlyArray<{ name: string; domain: string; industry: string }> = [
-  { name: "Octopipe Media", domain: "octopipe.example.com", industry: "video streaming" },
-  { name: "Datagrove Analytics", domain: "datagrove.example.com", industry: "data warehousing" },
-  { name: "Ferrostack Imaging", domain: "ferrostack.example.com", industry: "medical imaging" },
-  { name: "Cloudchapel Backup", domain: "cloudchapel.example.com", industry: "backup & archival" },
-  { name: "Snapfern Genomics", domain: "snapfern.example.com", industry: "genomics" },
-  { name: "Bitparcel CDN", domain: "bitparcel.example.com", industry: "content delivery" },
-  { name: "Torrentide Studios", domain: "torrentide.example.com", industry: "game development" },
-  { name: "Heliotrope VFX", domain: "heliotrope.example.com", industry: "visual effects" },
-  { name: "Quillstone Archive", domain: "quillstone.example.com", industry: "digital preservation" },
-  { name: "Loopline Robotics", domain: "loopline.example.com", industry: "robotics telemetry" },
-  { name: "Maribel Health", domain: "maribelhealth.example.com", industry: "health records" },
-  { name: "Granary Works", domain: "granaryworks.example.com", industry: "satellite imagery" },
+export const SALES_PERSONA_SLUGS = ["monica", "erlich", "jared"] as const;
+
+export type SalesPersonaSlug = (typeof SALES_PERSONA_SLUGS)[number];
+
+/** Fixed canon deal facts for a marquee account (see docs/COMPANY.md relationships). */
+interface CanonDeal {
+  readonly dealName: string;
+  readonly stage: DealStage;
+  readonly owner: SalesPersonaSlug;
+}
+
+interface CompanySeed {
+  readonly name: string;
+  readonly domain: string;
+  readonly industry: string;
+  readonly tier: PlanTier;
+  /** Present on canon marquee accounts; filler deals are drawn from the PRNG. */
+  readonly canon?: CanonDeal;
+}
+
+/**
+ * B2B accounts of the PiperNet platform. The first five are canon marquee
+ * accounts whose deal stage/owner reflect their show arcs (docs/COMPANY.md);
+ * the rest are canon minor companies or invented names that fit the show's
+ * world. Domains stay on .example.com — no real businesses.
+ */
+const COMPANY_POOL: ReadonlyArray<CompanySeed> = [
+  {
+    name: "Maleant Data Systems",
+    domain: "maleant.example.com",
+    industry: "enterprise data appliances",
+    tier: "enterprise",
+    canon: {
+      // S3: the box appliance contract closed under Jack Barker — legacy won account.
+      dealName: "Maleant Data Systems — appliance contract (the box)",
+      stage: "closedwon",
+      owner: "jared",
+    },
+  },
+  {
+    name: "Intersite",
+    domain: "intersite.example.com",
+    industry: "adult content streaming",
+    tier: "enterprise",
+    canon: {
+      // S2: ~$20M storage/transcode contract won in the bake-off vs Endframe.
+      dealName: "Intersite — storage & transcode contract (bake-off win)",
+      stage: "closedwon",
+      owner: "erlich",
+    },
+  },
+  {
+    name: "FGI",
+    domain: "fgi.example.com",
+    industry: "insurance",
+    tier: "enterprise",
+    canon: {
+      // S4: first commercial pilot of the decentralized internet.
+      dealName: "FGI — decentralized data pilot",
+      stage: "closedwon",
+      owner: "jared",
+    },
+  },
+  {
+    name: "Hooli",
+    domain: "hooli.example.com",
+    industry: "internet conglomerate (rival)",
+    tier: "enterprise",
+    canon: {
+      // Rival, not a customer: every acquisition/licensing overture was declined or hostile.
+      dealName: "Hooli — platform licensing (declined)",
+      stage: "closedlost",
+      owner: "monica",
+    },
+  },
+  {
+    name: "K-Hole Games",
+    domain: "k-hole.example.com",
+    industry: "game development",
+    tier: "enterprise",
+    canon: {
+      // S5: the flagship PiperNet compute customer (the 51%-attack-era launch).
+      dealName: "K-Hole Games — PiperNet compute (flagship)",
+      stage: "closedwon",
+      owner: "monica",
+    },
+  },
+  // Canon minor companies (deal stage/owner drawn from the PRNG).
+  { name: "Seppen", domain: "seppen.example.com", industry: "smart home appliances", tier: "team" },
+  { name: "RussFest", domain: "russfest.example.com", industry: "live events & festivals", tier: "team" },
+  { name: "Optimoji", domain: "optimoji.example.com", industry: "messaging", tier: "starter" },
+  // Invented filler, named for the show's world — any resemblance to real businesses is accidental.
+  { name: "Vrtigo Immersive", domain: "vrtigo.example.com", industry: "virtual reality", tier: "team" },
+  { name: "Dineros Pay", domain: "dineros.example.com", industry: "payments", tier: "team" },
+  { name: "Fropple", domain: "fropple.example.com", industry: "photo sharing", tier: "starter" },
+  { name: "Snibbet", domain: "snibbet.example.com", industry: "social analytics", tier: "starter" },
 ] as const;
 
 const FIRST_NAMES = [
@@ -190,13 +293,6 @@ const JOB_TITLES = [
   "Principal Engineer", "Head of Media Pipeline", "Engineering Manager",
 ] as const;
 
-/**
- * Sales-ish persona slugs from PERSONAS.md (the single source of truth for the
- * cast — see its format contract). Real HubSpot owners are seat-bound users, so
- * deals carry the persona as the `persona_owner` custom property instead.
- */
-export const SALES_PERSONA_SLUGS = ["monica", "erlich", "jared"] as const;
-
 const DEAL_STAGES: ReadonlyArray<DealStage> = [
   "appointmentscheduled",
   "qualifiedtobuy",
@@ -213,15 +309,30 @@ const TIER_MRR_RANGE: Record<PlanTier, readonly [number, number]> = {
   enterprise: [3200, 11800],
 };
 
-/** Typical middle-out compression ratio per tier (higher tiers get tuned models). */
-const TIER_RATIO_BASE: Record<PlanTier, number> = {
-  starter: 3.8,
-  team: 4.6,
-  enterprise: 5.2,
+/**
+ * Typical Weissman score per tier (higher tiers get tuned middle-out models).
+ * Canon bounds (docs/COMPANY.md products): 2.89 was the believed theoretical
+ * limit; 5.2 is Richard's record. Jitter is ±0.3, clamped to [2.0, 5.2].
+ */
+const TIER_WEISSMAN_BASE: Record<PlanTier, number> = {
+  starter: 3.2,
+  team: 4.1,
+  enterprise: 4.9,
 };
+
+export const WEISSMAN_SCORE_MIN = 2.0;
+export const WEISSMAN_SCORE_MAX = 5.2;
+
+/** PiperNet regions for node_joined events. */
+const PIPERNET_REGIONS = ["us-west", "us-east", "eu-central", "ap-south"] as const;
 
 const slugify = (name: string): string =>
   name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+const clampScore = (n: number): number =>
+  Math.min(WEISSMAN_SCORE_MAX, Math.max(WEISSMAN_SCORE_MIN, n));
 
 // ---------------------------------------------------------------------------
 // Generation — pure function of the seed
@@ -237,8 +348,7 @@ export const generateFixtures = (seed: number): FixtureDataset => {
 
   COMPANY_POOL.forEach((base, companyIndex) => {
     const companyId = slugify(base.name);
-    const planTier: PlanTier =
-      companyIndex % 3 === 0 ? "enterprise" : companyIndex % 3 === 1 ? "team" : "starter";
+    const planTier = base.tier;
     const [mrrMin, mrrMax] = TIER_MRR_RANGE[planTier];
     const mrr = int(rng, mrrMin, mrrMax);
     // Signed up 30–180 days before the usage window opens.
@@ -276,27 +386,38 @@ export const generateFixtures = (seed: number): FixtureDataset => {
       contacts.push(contact);
     }
 
-    // One deal per company, owned (conceptually) by a sales-ish persona.
-    const stage = pick(rng, DEAL_STAGES);
+    // One deal per company. Canon marquee accounts carry their canon-arc stage
+    // and a fixed persona owner; filler deals are drawn from the PRNG.
+    const stage = base.canon?.stage ?? pick(rng, DEAL_STAGES);
+    const ownerSlug =
+      base.canon?.owner ?? SALES_PERSONA_SLUGS[companyIndex % SALES_PERSONA_SLUGS.length]!;
     deals.push({
       id: `${companyId}-platform-deal`,
       simEventId: `fixture:deal:${companyId}-platform-deal`,
       simTime: isoAt(signupMs + int(rng, 3, 21) * DAY_MS),
       companyId,
-      name: `${base.name} — middle-out platform (${planTier})`,
+      name: base.canon?.dealName ?? `${base.name} — PiperNet platform (${planTier})`,
       stage,
       amount: mrr * 12,
-      ownerSlug: SALES_PERSONA_SLUGS[companyIndex % SALES_PERSONA_SLUGS.length]!,
+      ownerSlug,
     });
 
+    // Canon-pinned lost accounts (Hooli, the rival) never used the product — no
+    // usage. Filler accounts keep usage regardless of stage (a PRNG-drawn
+    // closedlost reads as a lost expansion deal on an active account).
+    if (base.canon?.stage === "closedlost") return;
+
     // ~4 weeks of product usage. Weekday-weighted, attributed to real contacts.
-    const ratioBase = TIER_RATIO_BASE[planTier];
+    const scoreBase = TIER_WEISSMAN_BASE[planTier];
+    let nodeCounter = 0;
     for (let day = 0; day < USAGE_WINDOW_DAYS; day++) {
       const dayStartMs = FIXTURE_EPOCH_MS + day * DAY_MS;
       const weekday = new Date(dayStartMs).getUTCDay();
       const isWeekend = weekday === 0 || weekday === 6;
       let dailyBytesIn = 0;
       let dailyBytesOut = 0;
+      let dailyScoreSum = 0;
+      let dailyScoreCount = 0;
       let seq = 0;
 
       for (const contact of companyContacts) {
@@ -316,10 +437,13 @@ export const generateFixtures = (seed: number): FixtureDataset => {
           const filesCompressed = int(rng, 1, 4);
           for (let f = 0; f < filesCompressed; f++) {
             const bytesIn = int(rng, 5, 4800) * 1024 * 1024; // 5MB–4.8GB
-            const ratio = ratioBase + int(rng, -40, 60) / 100;
-            const bytesOut = Math.round(bytesIn / ratio);
+            const weissmanScore = round2(clampScore(scoreBase + int(rng, -30, 30) / 100));
+            // Effective size reduction scales loosely with the score.
+            const bytesOut = Math.round(bytesIn / (weissmanScore * 1.2));
             dailyBytesIn += bytesIn;
             dailyBytesOut += bytesOut;
+            dailyScoreSum += weissmanScore;
+            dailyScoreCount += 1;
             usageEvents.push({
               simEventId: `fixture:usage:${companyId}:d${day}:${seq++}`,
               simTime: isoAt(loginMs + int(rng, 1, 50) * 60 * 1000),
@@ -329,26 +453,43 @@ export const generateFixtures = (seed: number): FixtureDataset => {
               properties: {
                 bytes_in: bytesIn,
                 bytes_out: bytesOut,
-                compression_ratio: Math.round((bytesIn / bytesOut) * 100) / 100,
+                weissman_score: weissmanScore,
               },
             });
           }
         }
       }
 
-      // One end-of-day aggregate ratio measurement per active day, attributed
-      // to the first contact (a service account would also work).
-      if (dailyBytesIn > 0 && companyContacts[0] !== undefined) {
+      // PiperNet-era flavor: occasionally the account brings a new node onto
+      // the network (~1 in 10 weekdays), attributed to the first contact.
+      if (!isWeekend && companyContacts[0] !== undefined && int(rng, 0, 9) === 0) {
+        nodeCounter += 1;
+        usageEvents.push({
+          simEventId: `fixture:usage:${companyId}:d${day}:${seq++}`,
+          simTime: isoAt(dayStartMs + 12 * 60 * 60 * 1000),
+          event: "node_joined",
+          distinctId: companyContacts[0].id,
+          companyId,
+          properties: {
+            node_id: `${companyId}-node-${nodeCounter}`,
+            region: pick(rng, PIPERNET_REGIONS),
+          },
+        });
+      }
+
+      // One end-of-day aggregate Weissman measurement per active day,
+      // attributed to the first contact (a service account would also work).
+      if (dailyScoreCount > 0 && companyContacts[0] !== undefined) {
         usageEvents.push({
           simEventId: `fixture:usage:${companyId}:d${day}:${seq++}`,
           simTime: isoAt(dayStartMs + 23 * 60 * 60 * 1000),
-          event: "compression_ratio_measured",
+          event: "weissman_score_measured",
           distinctId: companyContacts[0].id,
           companyId,
           properties: {
             bytes_in_total: dailyBytesIn,
             bytes_out_total: dailyBytesOut,
-            weissman_adjacent_ratio: Math.round((dailyBytesIn / dailyBytesOut) * 100) / 100,
+            weissman_score: round2(dailyScoreSum / dailyScoreCount),
           },
         });
       }

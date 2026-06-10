@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status: early scaffold
 
-This repo holds the design docs (ADRs), the [persona cards](PERSONAS.md), and a minimal pnpm/TypeScript toolchain with the Slack persona seeding script — the simulation engine itself is not built yet. This document captures the **intended design** so future instances can scaffold consistently. When you add real build/test/run commands, record them in "Bootstrapping" below — don't leave aspirational commands that don't run.
+This repo holds the design docs (ADRs), the [persona cards](PERSONAS.md), the [company card](docs/COMPANY.md) (canon eras/products/relationships), and a minimal pnpm/TypeScript toolchain with the Slack persona seeding script — the simulation engine itself is not built yet. This document captures the **intended design** so future instances can scaffold consistently. When you add real build/test/run commands, record them in "Bootstrapping" below — don't leave aspirational commands that don't run.
 
 ## What this is
 
@@ -78,14 +78,14 @@ How we get LLM-quality prose without ever putting an LLM on the fast-forward pat
 Key mechanics (details in ADR-0002):
 
 - **Arcs are the unit of hydration.** Related events are grouped into narrative **arcs** (`arc_id`): incident → Slack thread → Linear issue → postmortem. One arc per LLM call ⇒ coherent threads (message 3 knows what message 2 said).
-- **Prompts are pure functions of the log** — versioned in-repo **persona cards** ([PERSONAS.md](PERSONAS.md): Richard, Gilfoyle, Jared, …) + the arc's structured beats + a bounded world-state digest (the projection at the arc's start `sim_time`). Pure inputs make `prompt_hash` a stable cache key; better prompts auto-invalidate exactly the affected entries.
+- **Prompts are pure functions of the log** — versioned in-repo **persona cards** ([PERSONAS.md](PERSONAS.md): Richard, Gilfoyle, Jared, …) + the **company card** ([docs/COMPANY.md](docs/COMPANY.md): canon eras, products, business relationships) + the arc's structured beats + a bounded world-state digest (the projection at the arc's start `sim_time`). Pure inputs make `prompt_hash` a stable cache key; better prompts auto-invalidate exactly the affected entries.
 - **Template fallback on cache miss.** The LLM author and the template author implement the **same port**; playback degrades from "great prose" to "fine prose", never blocks. The no-LLM baseline (ship first, per ADR-0001) *is* the fallback path.
 - **Two determinism tiers.** Default: structural — event stream bit-identical; prose may differ if regenerated cold. Opt-in for canned demos: full — snapshot the populated cache with the timeline; replay reads cache only.
 - **Cost.** Hydration is async ⇒ Anthropic Batch API by default; model tier per arc importance (small for chatter, large for board meetings/incidents/retros); `tokens_per_sim_month` budget knob. Hydrate once, replay forever. Forked timelines share the parent's cache for the common event prefix.
 
 ### 6. Org chart & the role of agents
 
-The Pied Piper org (Richard/CEO, Gilfoyle, Dinesh, Jared, …) is **our own data** — roles, reporting structure, headcount over `sim_time` — owned in NeonDB and consumed by the generator. We do **not** delegate this to an external orchestrator. Per [ADR-0001](docs/adr/0001-deterministic-generator-core-drop-paperclip.md), real-time LLM agents (e.g. [Paperclip](https://paperclip.ing/)) are **dropped from the critical path** — they conflict with virtual time, determinism, and cost.
+The Pied Piper org (Richard/CEO, Gilfoyle, Dinesh, Jared, …) is **our own data** — roles, reporting structure, headcount over `sim_time` — owned in NeonDB and consumed by the generator. Canon facts (founding team ↔ [PERSONAS.md](PERSONAS.md) slugs, headcount per era, the era timeline that "time travel to seed stage / platform pivot" resolves against) live in [docs/COMPANY.md](docs/COMPANY.md). We do **not** delegate this to an external orchestrator. Per [ADR-0001](docs/adr/0001-deterministic-generator-core-drop-paperclip.md), real-time LLM agents (e.g. [Paperclip](https://paperclip.ing/)) are **dropped from the critical path** — they conflict with virtual time, determinism, and cost.
 
 Agents may appear in exactly two ways, neither a dependency of generation or time travel:
 
