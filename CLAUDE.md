@@ -142,6 +142,7 @@ A minimal TypeScript/Effect toolchain (pnpm) is committed. Real commands today:
 - `pnpm slack:profiles` — set each persona account's real name, display name, title, and avatar from its persona card via that account's user token (`scripts/slack/setup-profiles.ts`). Skips personas without a collected token.
 - `pnpm seed:hubspot` — seed the deterministic fixture customers (companies/contacts/deals from `scripts/fixtures/data.ts`) into a HubSpot developer test account via `scripts/hubspot/seed-fixtures.ts`. Requires `HUBSPOT_PRIVATE_APP_TOKEN` — see the script header for test-account + private-app setup (scopes).
 - `pnpm seed:posthog` — seed the fixture product-usage events (historical timestamps, deterministic UUIDv5 ids) into a PostHog project via `scripts/posthog/seed-fixtures.ts`. Copy `.env.example` to `.env` and fill `POSTHOG_PROJECT_API_KEY` (optional `POSTHOG_HOST`) — auto-loaded via dotenvx.
+- `pnpm generate:invoices` — render three mock Anthropic (Claude API) vendor invoices payable by Pied Piper into `fixtures/invoices/*.pdf` via `scripts/invoices/generate-anthropic-invoices.ts` (pdf-lib). Fully deterministic (explicit line-item data; PDF metadata dates pinned to each invoice's issue date — re-runs are byte-identical); each PDF is marked SPECIMEN and carries `timeline_id` + `sim_event_id` in the footer. No env vars needed.
 
 ### Secrets
 
