@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "seed:slack": "dotenvx run -- tsx scripts/slack/seed-personas.ts",
+    "slack:user-tokens": "dotenvx run -- tsx scripts/slack/collect-user-tokens.ts",
+    "slack:profiles": "dotenvx run -- tsx scripts/slack/setup-profiles.ts",
     "seed:hubspot": "dotenvx run -- tsx scripts/hubspot/seed-fixtures.ts",
     "seed:posthog": "dotenvx run -- tsx scripts/posthog/seed-fixtures.ts",
     "typecheck": "tsc --noEmit"
