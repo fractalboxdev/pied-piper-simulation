@@ -25,92 +25,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PDFDocument, PDFFont, PDFPage, StandardFonts, rgb } from "pdf-lib";
 
-import { FIXTURE_TIMELINE_ID } from "../fixtures/data.js";
-
-// ---------------------------------------------------------------------------
-// Invoice data — explicit and deterministic
-// ---------------------------------------------------------------------------
-
-interface LineItem {
-  readonly description: string;
-  /** Usage quantity in millions of tokens. */
-  readonly mtok: number;
-  /** USD per million tokens. */
-  readonly ratePerMTok: number;
-}
-
-interface InvoiceSpec {
-  /** Stable fixture id — also the idempotency anchor (sim_event_id suffix). */
-  readonly id: string;
-  readonly invoiceNumber: string;
-  readonly issueDate: string;
-  readonly dueDate: string;
-  readonly periodLabel: string;
-  readonly lineItems: ReadonlyArray<LineItem>;
-}
-
-const OPUS_IN = 5;
-const OPUS_OUT = 25;
-const OPUS_CACHE_READ = 0.5;
-const SONNET_IN = 3;
-const SONNET_OUT = 15;
-const HAIKU_IN = 1;
-const HAIKU_OUT = 5;
-
-/**
- * Usage ramps month over month (~1.5×) — PiperNet adoption is climbing and so
- * is Pied Piper's Claude bill. Quantities are MTok.
- */
-const INVOICES: ReadonlyArray<InvoiceSpec> = [
-  {
-    id: "anthropic-2024-01",
-    invoiceNumber: "INV-ANTH-2024-0117",
-    issueDate: "2024-02-01",
-    dueDate: "2024-03-02",
-    periodLabel: "January 1 – January 31, 2024",
-    lineItems: [
-      { description: "claude-opus-4-8 — input tokens", mtok: 184.6, ratePerMTok: OPUS_IN },
-      { description: "claude-opus-4-8 — output tokens", mtok: 22.4, ratePerMTok: OPUS_OUT },
-      { description: "claude-opus-4-8 — prompt caching read", mtok: 410.2, ratePerMTok: OPUS_CACHE_READ },
-      { description: "claude-sonnet-4-6 — input tokens", mtok: 612.0, ratePerMTok: SONNET_IN },
-      { description: "claude-sonnet-4-6 — output tokens", mtok: 73.5, ratePerMTok: SONNET_OUT },
-      { description: "claude-haiku-4-5 — input tokens", mtok: 1530.8, ratePerMTok: HAIKU_IN },
-      { description: "claude-haiku-4-5 — output tokens", mtok: 96.2, ratePerMTok: HAIKU_OUT },
-    ],
-  },
-  {
-    id: "anthropic-2024-02",
-    invoiceNumber: "INV-ANTH-2024-0203",
-    issueDate: "2024-03-01",
-    dueDate: "2024-03-31",
-    periodLabel: "February 1 – February 29, 2024",
-    lineItems: [
-      { description: "claude-opus-4-8 — input tokens", mtok: 277.1, ratePerMTok: OPUS_IN },
-      { description: "claude-opus-4-8 — output tokens", mtok: 34.9, ratePerMTok: OPUS_OUT },
-      { description: "claude-opus-4-8 — prompt caching read", mtok: 655.7, ratePerMTok: OPUS_CACHE_READ },
-      { description: "claude-sonnet-4-6 — input tokens", mtok: 941.3, ratePerMTok: SONNET_IN },
-      { description: "claude-sonnet-4-6 — output tokens", mtok: 112.8, ratePerMTok: SONNET_OUT },
-      { description: "claude-haiku-4-5 — input tokens", mtok: 2304.5, ratePerMTok: HAIKU_IN },
-      { description: "claude-haiku-4-5 — output tokens", mtok: 148.0, ratePerMTok: HAIKU_OUT },
-    ],
-  },
-  {
-    id: "anthropic-2024-03",
-    invoiceNumber: "INV-ANTH-2024-0288",
-    issueDate: "2024-04-01",
-    dueDate: "2024-05-01",
-    periodLabel: "March 1 – March 31, 2024",
-    lineItems: [
-      { description: "claude-opus-4-8 — input tokens", mtok: 419.4, ratePerMTok: OPUS_IN },
-      { description: "claude-opus-4-8 — output tokens", mtok: 51.6, ratePerMTok: OPUS_OUT },
-      { description: "claude-opus-4-8 — prompt caching read", mtok: 988.1, ratePerMTok: OPUS_CACHE_READ },
-      { description: "claude-sonnet-4-6 — input tokens", mtok: 1422.7, ratePerMTok: SONNET_IN },
-      { description: "claude-sonnet-4-6 — output tokens", mtok: 169.3, ratePerMTok: SONNET_OUT },
-      { description: "claude-haiku-4-5 — input tokens", mtok: 3477.9, ratePerMTok: HAIKU_IN },
-      { description: "claude-haiku-4-5 — output tokens", mtok: 221.4, ratePerMTok: HAIKU_OUT },
-    ],
-  },
-];
+import {
+  ANTHROPIC_INVOICES,
+  invoiceTotal,
+  lineTotal,
+  type AnthropicInvoice,
+} from "../fixtures/anthropic-invoices.ts";
+import { FIXTURE_TIMELINE_ID } from "../fixtures/data.ts";
 
 const VENDOR_LINES = [
   "Anthropic, PBC",
@@ -131,8 +52,6 @@ const BILL_TO_LINES = [
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
-const round2 = (n: number): number => Math.round(n * 100) / 100;
-
 const usd = (n: number): string =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -145,11 +64,6 @@ const longDate = (iso: string): string => {
     "July", "August", "September", "October", "November", "December"];
   return `${months[(m ?? 1) - 1]} ${d}, ${y}`;
 };
-
-const lineTotal = (item: LineItem): number => round2(item.mtok * item.ratePerMTok);
-
-const invoiceTotal = (spec: InvoiceSpec): number =>
-  round2(spec.lineItems.reduce((sum, item) => sum + lineTotal(item), 0));
 
 // ---------------------------------------------------------------------------
 // PDF layout (US Letter, 612 × 792 pt)
@@ -181,7 +95,7 @@ const drawRightAligned = (
   page.drawText(text, { x: rightX - font.widthOfTextAtSize(text, size), y, size, font, color });
 };
 
-const renderInvoice = async (spec: InvoiceSpec): Promise<Uint8Array> => {
+const renderInvoice = async (spec: AnthropicInvoice): Promise<Uint8Array> => {
   const doc = await PDFDocument.create();
   const fonts: Fonts = {
     regular: await doc.embedFont(StandardFonts.Helvetica),
@@ -319,7 +233,7 @@ const OUTPUT_DIR = join(process.cwd(), "fixtures", "invoices");
 
 const main = async (): Promise<void> => {
   await mkdir(OUTPUT_DIR, { recursive: true });
-  for (const spec of INVOICES) {
+  for (const spec of ANTHROPIC_INVOICES) {
     const bytes = await renderInvoice(spec);
     const path = join(OUTPUT_DIR, `${spec.id}.pdf`);
     await writeFile(path, bytes);

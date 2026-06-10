@@ -9,7 +9,9 @@
     "slack:profiles": "dotenvx run -- tsx scripts/slack/setup-profiles.ts",
     "seed:hubspot": "dotenvx run -- tsx scripts/hubspot/seed-fixtures.ts",
     "seed:posthog": "dotenvx run -- tsx scripts/posthog/seed-fixtures.ts",
+    "seed:stripe": "dotenvx run -- tsx scripts/stripe/seed-fixtures.ts",
     "generate:invoices": "tsx scripts/invoices/generate-anthropic-invoices.ts",
+    "report:economics": "tsx scripts/economics/report.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
