@@ -44,7 +44,10 @@
  *
  * Run
  * ---
- *   pnpm seed:slack
+ *   pnpm seed:slack             # seed; skip personas already in the channel
+ *   pnpm seed:slack --replace   # delete previously seeded intros, then re-seed all
+ *
+ * (`.env` at the repo root is loaded automatically via node --env-file-if-exists.)
  *
  * Behavior
  * --------
@@ -52,6 +55,10 @@
  * - Idempotent: every intro carries Slack message metadata
  *   { event_type: "persona_seeded", event_payload: { persona_slug } }; recent
  *   channel history is scanned first and already-seeded personas are skipped.
+ * - --replace: instead of skipping, every previously seeded intro (found via the
+ *   same metadata markers) is chat.delete'd first, then the full cast is
+ *   re-posted. Useful when persona cards change — Slack sandboxes cap the cast
+ *   size, so we swap messages in place rather than accumulate.
  * - Throttled to <= 1 message/sec; 429s honor Retry-After via Effect Schedule.
  */
 import { readFile } from "node:fs/promises";
@@ -164,6 +171,7 @@ const loadPersonas: Effect.Effect<ReadonlyArray<Persona>, PersonasParseError> =
 // ---------------------------------------------------------------------------
 
 interface SlackMessage {
+  readonly ts?: string;
   readonly metadata?: {
     readonly event_type?: string;
     readonly event_payload?: { readonly persona_slug?: string };
@@ -292,25 +300,51 @@ const ensureMembership = (
 
 const SEED_EVENT_TYPE = "persona_seeded";
 
-const alreadySeededSlugs = (
+interface SeededIntro {
+  readonly slug: string;
+  readonly ts: string;
+}
+
+const seededIntros = (
   api: SlackApi,
   channelId: string,
-): Effect.Effect<ReadonlySet<string>, SlackApiError | SlackRateLimitedError> =>
+): Effect.Effect<ReadonlyArray<SeededIntro>, SlackApiError | SlackRateLimitedError> =>
   api("conversations.history", {
     channel: channelId,
     limit: 200,
     include_all_metadata: true,
   }).pipe(
     Effect.map((data) => {
-      const slugs = new Set<string>();
+      const intros: Array<SeededIntro> = [];
       for (const message of data.messages ?? []) {
         const meta = message.metadata;
         const slug = meta?.event_payload?.persona_slug;
-        if (meta?.event_type === SEED_EVENT_TYPE && slug !== undefined) slugs.add(slug);
+        if (meta?.event_type === SEED_EVENT_TYPE && slug !== undefined && message.ts !== undefined) {
+          intros.push({ slug, ts: message.ts });
+        }
       }
-      return slugs;
+      return intros;
     }),
   );
+
+/** chat.delete our own previously seeded intro. A message deleted out from under us is success. */
+const deleteSeededIntro = (
+  api: SlackApi,
+  channelId: string,
+  intro: SeededIntro,
+): Effect.Effect<void, SlackApiError | SlackRateLimitedError> =>
+  Effect.gen(function* () {
+    yield* api("chat.delete", { channel: channelId, ts: intro.ts }).pipe(
+      Effect.catchTag("SlackApiError", (e) =>
+        e.code === "message_not_found"
+          ? Effect.succeed<SlackOkResponse>({ ok: true })
+          : Effect.fail(e),
+      ),
+    );
+    yield* Effect.log(`deleted previous intro for ${intro.slug}`);
+    // Same throttle as posting: chat.delete sits in the same rate-limit tier.
+    yield* Effect.sleep("1 second");
+  });
 
 // ---------------------------------------------------------------------------
 // Avatar validation — HEAD must be 2xx with an image/* content-type
@@ -374,6 +408,7 @@ const program = Effect.gen(function* () {
     return yield* Effect.fail(new MissingTokenError({ variable: "SLACK_BOT_TOKEN" }));
   }
   const channel = process.env.SLACK_CHANNEL ?? "#pied-piper";
+  const replace = process.argv.includes("--replace");
   const api = makeSlackApi(token);
 
   const personas = yield* loadPersonas;
@@ -382,12 +417,22 @@ const program = Effect.gen(function* () {
   const channelId = yield* resolveChannelId(api, channel);
   yield* ensureMembership(api, channelId);
 
-  const seeded = yield* alreadySeededSlugs(api, channelId);
+  const existing = yield* seededIntros(api, channelId);
+  if (replace && existing.length > 0) {
+    yield* Effect.log(`--replace: deleting ${existing.length} previously seeded intro(s)`);
+    yield* Effect.forEach(existing, (intro) => deleteSeededIntro(api, channelId, intro), {
+      concurrency: 1, // sequential: throttling
+    });
+  }
+  const seeded: ReadonlySet<string> = replace
+    ? new Set<string>()
+    : new Set(existing.map((intro) => intro.slug));
+
   yield* Effect.forEach(
     personas,
     (persona) =>
       seeded.has(persona.slug)
-        ? Effect.log(`skip ${persona.slug} — already seeded in ${channel}`)
+        ? Effect.log(`skip ${persona.slug} — already seeded in ${channel} (use --replace to re-seed)`)
         : seedPersona(api, channelId, persona),
     { concurrency: 1 }, // sequential: ordering + throttling
   );
