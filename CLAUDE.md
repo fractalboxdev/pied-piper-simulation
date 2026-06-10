@@ -137,7 +137,7 @@ A minimal TypeScript/Effect toolchain (pnpm) is committed. Real commands today:
 
 - `pnpm install` — install dependencies (`effect`, `tsx`, `typescript`).
 - `pnpm typecheck` (or `pnpm exec tsc --noEmit`) — typecheck; must pass before committing.
-- `pnpm seed:slack` — seed the [PERSONAS.md](PERSONAS.md) cast into a Slack sandbox channel via `scripts/slack/seed-personas.ts` (single-app `chat.postMessage` + `username`/`icon_url` overrides). Requires `SLACK_BOT_TOKEN` (and optional `SLACK_CHANNEL`) — see `.env.example` and the script header for Slack app setup (manifest + scopes).
+- `pnpm seed:slack` — seed the [PERSONAS.md](PERSONAS.md) cast into a Slack sandbox channel via `scripts/slack/seed-personas.ts` (single-app `chat.postMessage` + `username`/`icon_url` overrides). Requires `SLACK_BOT_TOKEN` (and optional `SLACK_CHANNEL`) — a repo-root `.env` is loaded automatically if present; see `.env.example` and the script header for Slack app setup (manifest + scopes). Default runs are idempotent (already-seeded personas are skipped); `pnpm seed:slack --replace` deletes the previously seeded intros and re-posts the full cast (use after editing persona cards).
 - `pnpm seed:hubspot` — seed the deterministic fixture customers (companies/contacts/deals from `scripts/fixtures/data.ts`) into a HubSpot developer test account via `scripts/hubspot/seed-fixtures.ts`. Requires `HUBSPOT_PRIVATE_APP_TOKEN` — see the script header for test-account + private-app setup (scopes).
 - `pnpm seed:posthog` — seed the fixture product-usage events (historical timestamps, deterministic UUIDv5 ids) into a PostHog project via `scripts/posthog/seed-fixtures.ts`. Requires `POSTHOG_PROJECT_API_KEY` (optional `POSTHOG_HOST`).
 
