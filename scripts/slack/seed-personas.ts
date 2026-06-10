@@ -407,7 +407,9 @@ const program = Effect.gen(function* () {
   if (token === undefined || token === "") {
     return yield* Effect.fail(new MissingTokenError({ variable: "SLACK_BOT_TOKEN" }));
   }
-  const channel = process.env.SLACK_CHANNEL ?? "#pied-piper";
+  // `??` alone is not enough: an empty `SLACK_CHANNEL=` line in .env yields "".
+  const channelEnv = process.env.SLACK_CHANNEL;
+  const channel = channelEnv !== undefined && channelEnv !== "" ? channelEnv : "#pied-piper";
   const replace = process.argv.includes("--replace");
   const api = makeSlackApi(token);
 
