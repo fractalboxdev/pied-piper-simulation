@@ -9,7 +9,8 @@
  *
  * Uses (per persona, with that persona's own token):
  *   - users.profile.set  → real_name, display_name, title   (scope users.profile:write)
- *   - users.setPhoto     → avatar from the card's avatar_url (scope users.profile:write)
+ *   - users.setPhoto     → avatar from the card's avatar_file (committed under
+ *     assets/avatars/), falling back to avatar_url (scope users.profile:write)
  *
  * Run
  * ---

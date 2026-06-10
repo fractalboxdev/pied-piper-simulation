@@ -65,6 +65,7 @@ export const Persona = Schema.Struct({
   quirks: Schema.Array(Schema.String),
   catchphrases: Schema.Array(Schema.String),
   avatar_url: Schema.String,
+  avatar_file: Schema.String,
   intro: Schema.String,
 });
 export type Persona = typeof Persona.Type;
@@ -215,8 +216,44 @@ export const validateAvatar = (persona: Persona): Effect.Effect<void, AvatarInva
     }),
   );
 
-/** Download the avatar bytes (for users.setPhoto). */
-export const fetchAvatar = (
+const EXT_CONTENT_TYPE: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  gif: "image/gif",
+};
+
+/** Read the committed avatar from `avatar_file` (assets/avatars/<slug>.*). */
+const readLocalAvatar = (
+  persona: Persona,
+): Effect.Effect<{ bytes: ArrayBuffer; contentType: string }, AvatarInvalidError> =>
+  Effect.gen(function* () {
+    const ext = persona.avatar_file.split(".").pop() ?? "";
+    const contentType = EXT_CONTENT_TYPE[ext.toLowerCase()];
+    if (contentType === undefined) {
+      return yield* Effect.fail(
+        new AvatarInvalidError({
+          slug: persona.slug,
+          url: persona.avatar_file,
+          detail: `unsupported avatar_file extension: .${ext}`,
+        }),
+      );
+    }
+    const buf = yield* Effect.tryPromise({
+      try: () => readFile(join(repoRoot, persona.avatar_file)),
+      catch: (cause) =>
+        new AvatarInvalidError({
+          slug: persona.slug,
+          url: persona.avatar_file,
+          detail: `local read failed: ${String(cause)}`,
+        }),
+    });
+    const bytes = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    return { bytes, contentType };
+  });
+
+/** Download the avatar bytes from `avatar_url` (fallback when the vendored file is unusable). */
+const fetchRemoteAvatar = (
   persona: Persona,
 ): Effect.Effect<{ bytes: ArrayBuffer; contentType: string }, AvatarInvalidError> =>
   Effect.tryPromise({
@@ -249,4 +286,20 @@ export const fetchAvatar = (
           }),
       });
     }),
+  );
+
+/** Avatar bytes for uploads (users.setPhoto): committed file first, remote URL fallback. */
+export const fetchAvatar = (
+  persona: Persona,
+): Effect.Effect<{ bytes: ArrayBuffer; contentType: string }, AvatarInvalidError> =>
+  readLocalAvatar(persona).pipe(
+    Effect.catchTag("AvatarInvalidError", (localError) =>
+      fetchRemoteAvatar(persona).pipe(
+        Effect.tapError(() =>
+          Effect.logWarning(
+            `avatar for "${persona.slug}": local file failed (${localError.detail}), remote fallback also failed`,
+          ),
+        ),
+      ),
+    ),
   );
