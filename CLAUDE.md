@@ -2,9 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Status: greenfield
+## Status: early scaffold
 
-This repo is empty (no commits, no code yet). This document captures the **intended design** so future instances can scaffold consistently. When you add real build/test/run commands, replace the "Bootstrapping" placeholders below with the actual invocations — don't leave aspirational commands that don't run.
+This repo holds the design docs (ADRs), the [persona cards](PERSONAS.md), and a minimal pnpm/TypeScript toolchain with the Slack persona seeding script — the simulation engine itself is not built yet. This document captures the **intended design** so future instances can scaffold consistently. When you add real build/test/run commands, record them in "Bootstrapping" below — don't leave aspirational commands that don't run.
 
 ## What this is
 
@@ -78,7 +78,7 @@ How we get LLM-quality prose without ever putting an LLM on the fast-forward pat
 Key mechanics (details in ADR-0002):
 
 - **Arcs are the unit of hydration.** Related events are grouped into narrative **arcs** (`arc_id`): incident → Slack thread → Linear issue → postmortem. One arc per LLM call ⇒ coherent threads (message 3 knows what message 2 said).
-- **Prompts are pure functions of the log** — versioned in-repo **persona cards** (Richard, Gilfoyle, Jared, …) + the arc's structured beats + a bounded world-state digest (the projection at the arc's start `sim_time`). Pure inputs make `prompt_hash` a stable cache key; better prompts auto-invalidate exactly the affected entries.
+- **Prompts are pure functions of the log** — versioned in-repo **persona cards** ([PERSONAS.md](PERSONAS.md): Richard, Gilfoyle, Jared, …) + the arc's structured beats + a bounded world-state digest (the projection at the arc's start `sim_time`). Pure inputs make `prompt_hash` a stable cache key; better prompts auto-invalidate exactly the affected entries.
 - **Template fallback on cache miss.** The LLM author and the template author implement the **same port**; playback degrades from "great prose" to "fine prose", never blocks. The no-LLM baseline (ship first, per ADR-0001) *is* the fallback path.
 - **Two determinism tiers.** Default: structural — event stream bit-identical; prose may differ if regenerated cold. Opt-in for canned demos: full — snapshot the populated cache with the timeline; replay reads cache only.
 - **Cost.** Hydration is async ⇒ Anthropic Batch API by default; model tier per arc importance (small for chatter, large for board meetings/incidents/retros); `tokens_per_sim_month` budget knob. Hydrate once, replay forever. Forked timelines share the parent's cache for the common event prefix.
@@ -129,6 +129,12 @@ This repo lives under the FractalBox workspace; the root `CLAUDE.md` / `AGENTS.m
 - **No absolute local paths** in committed code, PRs, or anything pushed to GitHub — use repo-relative paths.
 - GitHub remote: `fractalboxdev/pied-piper-simulation`.
 
-## Bootstrapping (fill in as the project takes shape)
+## Bootstrapping
 
-No toolchain is committed yet. When scaffolding, the likely shape is a TypeScript/Effect project (pnpm). Record the real commands here once they exist — e.g. `pnpm install`, `pnpm test`, `pnpm test <file>` for a single test, `pnpm dev`/the long-running sim entrypoint, and the DB migration command. Until then, there is nothing to build or test.
+A minimal TypeScript/Effect toolchain (pnpm) is committed. Real commands today:
+
+- `pnpm install` — install dependencies (`effect`, `tsx`, `typescript`).
+- `pnpm typecheck` (or `pnpm exec tsc --noEmit`) — typecheck; must pass before committing.
+- `pnpm seed:slack` — seed the [PERSONAS.md](PERSONAS.md) cast into a Slack sandbox channel via `scripts/slack/seed-personas.ts` (single-app `chat.postMessage` + `username`/`icon_url` overrides). Requires `SLACK_BOT_TOKEN` (and optional `SLACK_CHANNEL`) — see `.env.example` and the script header for Slack app setup (manifest + scopes).
+
+No tests, sim entrypoint, or DB migrations exist yet — add the commands here as they land (`pnpm test`, `pnpm dev`, migration command).
