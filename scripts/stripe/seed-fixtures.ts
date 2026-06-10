@@ -21,10 +21,14 @@
  *   2. create the customer on that clock (metadata: sim_event_id, sim_time,
  *      timeline_id) and a 2-item subscription (base + metered,
  *      collection_method=send_invoice so no card is needed)
- *   3. week by week: advance the clock, then report that week's daily
- *      compressed GB as meter events (timestamps = sim day, always within the
- *      clock's validation window)
- *   4. advance past the billing-cycle end → Stripe invoices the month,
+ *   3. advance the clock to the usage-window end, then report each day's
+ *      compressed GB as meter events (timestamps = sim day; for a test-clock
+ *      customer Stripe validates them against the clock's frozen time, so the
+ *      whole window fits in the 35-day lookback)
+ *   4. poll the meter's event summaries until the customer's aggregate matches
+ *      what we sent — meter aggregation is async, and crossing the cycle
+ *      boundary too early generates an invoice with metered quantity 0
+ *   5. advance past the billing-cycle end → Stripe invoices the month,
  *      metered usage and all. Revenue by client lands in the dashboard.
  *
  * Replay safety: products/prices are looked up by fixed ids / lookup_keys;
@@ -94,6 +98,11 @@ export class StripeRateLimitedError extends Schema.TaggedError<StripeRateLimited
 export class ClockAdvanceTimeoutError extends Schema.TaggedError<ClockAdvanceTimeoutError>()(
   "ClockAdvanceTimeoutError",
   { clockId: Schema.String, targetTime: Schema.Number },
+) {}
+
+export class MeterAggregationTimeoutError extends Schema.TaggedError<MeterAggregationTimeoutError>()(
+  "MeterAggregationTimeoutError",
+  { companyName: Schema.String, expectedGb: Schema.Number, observedGb: Schema.Number },
 ) {}
 
 // ---------------------------------------------------------------------------
@@ -325,7 +334,16 @@ const findCustomer = (
       limit: "1",
     })) as StripeList;
     const hit = res.data?.[0];
-    return hit === undefined ? undefined : idOf(hit);
+    if (hit === undefined) return undefined;
+    // The search index is eventually consistent: right after --replace it
+    // still returns customers whose test clock (and thus the customer) was
+    // just deleted. Verify the hit against the source of truth.
+    const customer = (yield* api("GET", `/v1/customers/${idOf(hit)}`).pipe(
+      Effect.catchTag("StripeApiError", (e) =>
+        e.status === 404 ? Effect.succeed({ deleted: true }) : Effect.fail(e),
+      ),
+    )) as StripeObject & { readonly deleted?: boolean };
+    return customer.deleted === true ? undefined : idOf(hit);
   });
 
 /** Advance a clock and poll until it settles back to `ready`. */
@@ -362,30 +380,80 @@ const advanceClock = (
     );
   });
 
-const chunkIntoWeeks = (
-  days: ReadonlyArray<DailyCompression>,
-): ReadonlyArray<ReadonlyArray<DailyCompression>> => {
-  const weeks = new Map<number, Array<DailyCompression>>();
-  for (const day of days) {
-    const week = Math.floor(day.dayIndex / 7);
-    const list = weeks.get(week) ?? [];
-    list.push(day);
-    weeks.set(week, list);
-  }
-  return [...weeks.entries()].sort(([a], [b]) => a - b).map(([, list]) => list);
-};
-
 const BYTES_PER_GB = 1024 ** 3;
+
+interface MeterSummaryList {
+  readonly data?: ReadonlyArray<{ readonly aggregated_value?: number }>;
+}
+
+/**
+ * Meter ingestion → aggregation is asynchronous. An invoice generated while
+ * events are still aggregating bills quantity 0, so before crossing the
+ * billing-cycle boundary we poll the meter's event summaries until the
+ * customer's aggregate matches what we sent (observed lag: ~0.5–2 min).
+ */
+const awaitMeterAggregation = (
+  api: StripeApi,
+  meterId: string,
+  customerId: string,
+  companyName: string,
+  expectedGb: number,
+  startSeconds: number,
+  endSeconds: number,
+): Effect.Effect<
+  void,
+  StripeApiError | StripeRateLimitedError | MeterAggregationTimeoutError
+> =>
+  Effect.gen(function* () {
+    const summaries = (yield* api(
+      "GET",
+      `/v1/billing/meters/${meterId}/event_summaries`,
+      {
+        customer: customerId,
+        start_time: String(startSeconds),
+        end_time: String(endSeconds),
+        value_grouping_window: "day",
+        limit: "40",
+      },
+    )) as MeterSummaryList;
+    const observed = (summaries.data ?? []).reduce(
+      (sum, s) => sum + (s.aggregated_value ?? 0),
+      0,
+    );
+    if (observed < expectedGb - 0.01) {
+      return yield* Effect.fail(
+        new MeterAggregationTimeoutError({
+          companyName,
+          expectedGb,
+          observedGb: observed,
+        }),
+      );
+    }
+  }).pipe(
+    Effect.retry(
+      Schedule.spaced(Duration.seconds(5)).pipe(
+        Schedule.intersect(Schedule.recurs(60)), // up to ~5 min
+        Schedule.whileInput(
+          (e: StripeApiError | StripeRateLimitedError | MeterAggregationTimeoutError) =>
+            e._tag === "MeterAggregationTimeoutError",
+        ),
+      ),
+    ),
+  );
 
 const seedCompany = (
   api: StripeApi,
   company: FixtureCompany,
   days: ReadonlyArray<DailyCompression>,
+  meterId: string,
   meteredPriceByTier: Record<PlanTier, string>,
   offsetMs: number,
 ): Effect.Effect<
   void,
-  StripeApiError | StripeRateLimitedError | ClockAdvanceTimeoutError
+  | StripeApiError
+  | StripeRateLimitedError
+  | ClockAdvanceTimeoutError
+  | MeterAggregationTimeoutError
 > =>
   Effect.gen(function* () {
     const customerSimEventId = `fixture:stripe-customer:${company.id}`;
@@ -437,29 +505,40 @@ const seedCompany = (
       "metadata[company_id]": company.id,
     });
 
-    // 3. Lockstep replay: advance to each week's end, then report that week's
-    // daily usage (timestamps ≤ the clock's new frozen time).
-    for (const week of chunkIntoWeeks(days)) {
-      const last = week[week.length - 1];
-      if (last === undefined) continue;
-      const weekEndMs = WINDOW_START_MS + (last.dayIndex + 1) * DAY_MS;
-      yield* advanceClock(api, clockId, toClockSeconds(weekEndMs, offsetMs));
-      for (const day of week) {
-        const gb = day.bytesIn / BYTES_PER_GB;
-        const dayNoonMs = WINDOW_START_MS + day.dayIndex * DAY_MS + 12 * 60 * 60 * 1000;
-        yield* api("POST", "/v1/billing/meter_events", {
-          event_name: METER_EVENT_NAME,
-          identifier: `fixture:stripe-meter:${company.id}:d${day.dayIndex}`,
-          timestamp: String(toClockSeconds(dayNoonMs, offsetMs)),
-          "payload[stripe_customer_id]": customerId,
-          "payload[value]": gb.toFixed(4),
-        });
-      }
+    // 3. Advance to the usage-window end, then replay every day's usage —
+    // all timestamps sit in [frozen−35d, frozen], inside the open period.
+    // The identifier is customer-scoped so retries within a run dedupe but a
+    // --replace reseed (new customer id) is not swallowed by Stripe's
+    // meter-event dedup window.
+    const windowEndMs = WINDOW_START_MS + USAGE_WINDOW_DAYS * DAY_MS;
+    yield* advanceClock(api, clockId, toClockSeconds(windowEndMs, offsetMs));
+    for (const day of days) {
+      const gb = day.bytesIn / BYTES_PER_GB;
+      const dayNoonMs = WINDOW_START_MS + day.dayIndex * DAY_MS + 12 * 60 * 60 * 1000;
+      yield* api("POST", "/v1/billing/meter_events", {
+        event_name: METER_EVENT_NAME,
+        identifier: `${customerId}:d${day.dayIndex}`,
+        timestamp: String(toClockSeconds(dayNoonMs, offsetMs)),
+        "payload[stripe_customer_id]": customerId,
+        "payload[value]": gb.toFixed(4),
+      });
     }
 
-    // 4. Cross the cycle boundary → Stripe generates the month's invoice.
-    yield* advanceClock(api, clockId, toClockSeconds(FINAL_CLOCK_MS, offsetMs));
+    // 4. Wait for async meter aggregation to catch up — crossing the cycle
+    // boundary earlier generates an invoice with metered quantity 0.
     const totalGb = days.reduce((sum, d) => sum + d.bytesIn, 0) / BYTES_PER_GB;
+    yield* awaitMeterAggregation(
+      api,
+      meterId,
+      customerId,
+      company.name,
+      totalGb,
+      toClockSeconds(WINDOW_START_MS, offsetMs),
+      toClockSeconds(windowEndMs, offsetMs),
+    );
+
+    // 5. Cross the cycle boundary → Stripe generates the month's invoice.
+    yield* advanceClock(api, clockId, toClockSeconds(FINAL_CLOCK_MS, offsetMs));
     yield* Effect.log(
       `+ ${company.name}: customer ${customerId}, ${days.length} usage days, ${totalGb.toFixed(1)} GB metered, invoiced`,
     );
@@ -517,7 +596,8 @@ const program = Effect.gen(function* () {
   // Clocks are independent; modest parallelism keeps total advance-poll time sane.
   yield* Effect.forEach(
     active,
-    (company) => seedCompany(api, company, daily.get(company.id) ?? [], meteredPriceByTier, offsetMs),
+    (company) =>
+      seedCompany(api, company, daily.get(company.id) ?? [], meterId, meteredPriceByTier, offsetMs),
     { concurrency: 3 },
   );
   yield* Effect.log("done. Revenue by client: Stripe dashboard → Billing → Invoices (test mode).");
@@ -551,6 +631,10 @@ const main = program.pipe(
     ClockAdvanceTimeoutError: (e) =>
       Effect.logError(
         `test clock ${e.clockId} did not reach 'ready' after advancing to ${new Date(e.targetTime * 1000).toISOString()} — check the Stripe dashboard, then re-run (seeded companies are skipped).`,
+      ).pipe(Effect.andThen(fail)),
+    MeterAggregationTimeoutError: (e) =>
+      Effect.logError(
+        `${e.companyName}: meter aggregation still at ${e.observedGb.toFixed(2)} GB of ${e.expectedGb.toFixed(2)} GB after ~5 min — the customer's cycle-end invoice was NOT generated. Reseed this timeline with --replace once Stripe catches up.`,
       ).pipe(Effect.andThen(fail)),
   }),
 );
