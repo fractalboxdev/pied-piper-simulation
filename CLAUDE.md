@@ -135,10 +135,14 @@ This repo lives under the FractalBox workspace; the root `CLAUDE.md` / `AGENTS.m
 
 A minimal TypeScript/Effect toolchain (pnpm) is committed. Real commands today:
 
-- `pnpm install` — install dependencies (`effect`, `tsx`, `typescript`).
+- `pnpm install` — install dependencies (`effect`, `tsx`, `typescript`, `@dotenvx/dotenvx`).
 - `pnpm typecheck` (or `pnpm exec tsc --noEmit`) — typecheck; must pass before committing.
-- `pnpm seed:slack` — seed the [PERSONAS.md](PERSONAS.md) cast into a Slack sandbox channel via `scripts/slack/seed-personas.ts` (single-app `chat.postMessage` + `username`/`icon_url` overrides). Requires `SLACK_BOT_TOKEN` (and optional `SLACK_CHANNEL`) — a repo-root `.env` is loaded automatically if present; see `.env.example` and the script header for Slack app setup (manifest + scopes). Default runs are idempotent (already-seeded personas are skipped); `pnpm seed:slack --replace` deletes the previously seeded intros and re-posts the full cast (use after editing persona cards).
+- `pnpm seed:slack` — seed the [PERSONAS.md](PERSONAS.md) cast into a Slack sandbox channel via `scripts/slack/seed-personas.ts` (single-app `chat.postMessage` + `username`/`icon_url` overrides). Requires `SLACK_BOT_TOKEN` (and optional `SLACK_CHANNEL`); see `.env.example` and the script header for Slack app setup (manifest + scopes). Default runs are idempotent (already-seeded personas are skipped); `pnpm seed:slack --replace` deletes the previously seeded intros and re-posts the full cast (use after editing persona cards).
 - `pnpm seed:hubspot` — seed the deterministic fixture customers (companies/contacts/deals from `scripts/fixtures/data.ts`) into a HubSpot developer test account via `scripts/hubspot/seed-fixtures.ts`. Requires `HUBSPOT_PRIVATE_APP_TOKEN` — see the script header for test-account + private-app setup (scopes).
-- `pnpm seed:posthog` — seed the fixture product-usage events (historical timestamps, deterministic UUIDv5 ids) into a PostHog project via `scripts/posthog/seed-fixtures.ts`. Requires `POSTHOG_PROJECT_API_KEY` (optional `POSTHOG_HOST`).
+- `pnpm seed:posthog` — seed the fixture product-usage events (historical timestamps, deterministic UUIDv5 ids) into a PostHog project via `scripts/posthog/seed-fixtures.ts`. Copy `.env.example` to `.env` and fill `POSTHOG_PROJECT_API_KEY` (optional `POSTHOG_HOST`) — auto-loaded via dotenvx.
+
+### Secrets
+
+All `pnpm seed:*` scripts run through [dotenvx](https://dotenvx.com) (`dotenvx run -- tsx ...`), which injects a repo-root `.env` into the child process — the scripts themselves only read plain `process.env`, no per-script loader code. Plaintext `.env` (gitignored) works out of the box: copy `.env.example` to `.env` and fill values. Optionally, the team can adopt **encrypted env files**: `dotenvx set POSTHOG_PROJECT_API_KEY <key>` encrypts the value in place (public key stored in `.env`, private decryption key written to `.env.keys`). Committing the encrypted `.env` would require deliberately removing `.env` from `.gitignore`; `.env.keys` stays local and gitignored — **never commit it**.
 
 No tests, sim entrypoint, or DB migrations exist yet — add the commands here as they land (`pnpm test`, `pnpm dev`, migration command).

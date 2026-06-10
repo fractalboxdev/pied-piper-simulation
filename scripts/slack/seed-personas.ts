@@ -47,7 +47,8 @@
  *   pnpm seed:slack             # seed; skip personas already in the channel
  *   pnpm seed:slack --replace   # delete previously seeded intros, then re-seed all
  *
- * (`.env` at the repo root is loaded automatically via node --env-file-if-exists.)
+ * (A repo-root `.env` is injected automatically via dotenvx — `pnpm seed:slack`
+ * runs `dotenvx run -- tsx ...`. The script itself just reads process.env.)
  *
  * Behavior
  * --------

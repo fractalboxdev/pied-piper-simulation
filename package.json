@@ -4,15 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "seed:slack": "tsx --env-file-if-exists=.env scripts/slack/seed-personas.ts",
-    "seed:hubspot": "tsx scripts/hubspot/seed-fixtures.ts",
-    "seed:posthog": "tsx scripts/posthog/seed-fixtures.ts",
+    "seed:slack": "dotenvx run -- tsx scripts/slack/seed-personas.ts",
+    "seed:hubspot": "dotenvx run -- tsx scripts/hubspot/seed-fixtures.ts",
+    "seed:posthog": "dotenvx run -- tsx scripts/posthog/seed-fixtures.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "effect": "^3.16.0"
   },
   "devDependencies": {
+    "@dotenvx/dotenvx": "^1.71.2",
     "@types/node": "^22.15.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0"
