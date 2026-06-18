@@ -170,21 +170,33 @@ const seededIntros = (
     }),
   );
 
-/** chat.delete our own previously seeded intro. A message deleted out from under us is success. */
+/**
+ * chat.delete our own previously seeded intro. A message deleted out from under
+ * us is success; cant_delete_message (intro posted by a previous app install's
+ * bot identity — e.g. workspace-level vs org-level installs are distinct bots)
+ * is warned and skipped so --replace still posts the fresh cast.
+ */
 const deleteSeededIntro = (
   api: SlackApi,
   channelId: string,
   intro: SeededIntro,
 ): Effect.Effect<void, SlackCallError> =>
   Effect.gen(function* () {
-    yield* api("chat.delete", { channel: channelId, ts: intro.ts }).pipe(
+    const outcome = yield* api("chat.delete", { channel: channelId, ts: intro.ts }).pipe(
+      Effect.as("deleted" as const),
       Effect.catchTag("SlackApiError", (e) =>
         e.code === "message_not_found"
-          ? Effect.succeed<SlackOkResponse>({ ok: true })
-          : Effect.fail(e),
+          ? Effect.succeed("already-gone" as const)
+          : e.code === "cant_delete_message"
+            ? Effect.succeed("not-ours" as const)
+            : Effect.fail(e),
       ),
     );
-    yield* Effect.log(`deleted previous intro for ${intro.slug}`);
+    yield* outcome === "not-ours"
+      ? Effect.logWarning(
+          `cannot delete old intro for ${intro.slug} (ts ${intro.ts}) — posted by a different app install; remove it manually`,
+        )
+      : Effect.log(`deleted previous intro for ${intro.slug}`);
     // Same throttle as posting: chat.delete sits in the same rate-limit tier.
     yield* Effect.sleep("1 second");
   });
